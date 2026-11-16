@@ -536,6 +536,10 @@ const DEFAULT_MODEL = "aether-everyday";
 const GUEST_ALLOWED_MODELS = ["aether-everyday"];   // keep in sync with the server
 const GUEST_DEFAULT_MODEL = "aether-everyday";
 
+// Fallback used whenever the selected model isn't loaded yet (MODELS fills from /health).
+const PLACEHOLDER_MODEL = { name: "Aether", desc: "Loading…", syntaxCode: false, vision: false };
+const modelInfo = id => MODELS[id] || PLACEHOLDER_MODEL;
+
 // Reads the model catalog from the server and (re)builds MODELS.
 async function loadModels() {
     try {
@@ -743,7 +747,7 @@ function dotClass(id) {
 }
 
 function updateModelUI() {
-    const m = MODELS[selectedModel];
+    const m = modelInfo(selectedModel);
     $("modelButtonName").textContent = m.name;
     $("topModelName").textContent = m.name;
     $("modelDot").className = "chip-dot " + dotClass(selectedModel);
@@ -780,7 +784,7 @@ function selectModel(id) {
     updateComposer();
 }
 
-function isSyntaxOn() { return !!MODELS[selectedModel].syntaxCode && syntaxActive; }
+function isSyntaxOn() { return !!modelInfo(selectedModel).syntaxCode && syntaxActive; }
 
 /* ===================================================================
    Image attachments
@@ -1021,7 +1025,7 @@ async function getMemory() {
 
 function openModelInfo() {
     openModalShell();
-    const m = MODELS[selectedModel], online = modelStatus ? dotClass(selectedModel) === "online" : null;
+    const m = modelInfo(selectedModel), online = modelStatus ? dotClass(selectedModel) === "online" : null;
     modalContent.innerHTML = "<h2></h2><p></p><p></p>";
     const [h, p1, p2] = modalContent.children;
     h.textContent = m.name;
@@ -1328,7 +1332,7 @@ function updateComposer() {
     const canSend = isLoggedIn() || GUEST_ALLOWED_MODELS.includes(selectedModel);
     messageInput.disabled = !canSend;
     messageInput.placeholder = !canSend ? "Log in to chat with Aether..."
-        : (isLoggedIn() ? (isSyntaxOn() ? "Describe the code you want…" : "Message Aether...") : "Message " + MODELS[selectedModel].name + " (guest mode)...");
+        : (isLoggedIn() ? (isSyntaxOn() ? "Describe the code you want…" : "Message Aether...") : "Message " + modelInfo(selectedModel).name + " (guest mode)...");
     sendButton.disabled = !canSend || thinking || (messageInput.value.trim().length === 0 && pendingImages.length === 0);
 }
 const isNearBottom = (th = 120) => chatArea.scrollHeight - chatArea.scrollTop - chatArea.clientHeight <= th;
@@ -1517,7 +1521,7 @@ modelMenu.addEventListener("click", e => {
 });
 
 syntaxToggle.addEventListener("click", () => {
-    if (thinking || !MODELS[selectedModel].syntaxCode) return;
+    if (thinking || !modelInfo(selectedModel).syntaxCode) return;
     syntaxActive = !syntaxActive;
     localStorage.setItem(SYNTAX_KEY, syntaxActive ? "1" : "0");
     updateModelUI(); updateComposer();
