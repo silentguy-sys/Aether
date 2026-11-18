@@ -154,6 +154,18 @@ body.is-generating .brand-logo{animation:spin 1.1s linear infinite}
 .message-content blockquote{margin:.6em 0;padding:2px 0 2px 14px;border-left:3px solid var(--border-strong);color:var(--muted)}
 .message-content a{color:var(--accent)}
 
+/* Sources (web search results) */
+.sources{margin:16px 0 6px;padding-top:12px;border-top:1px solid var(--border)}
+.sources-title{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}
+.source-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px}
+.message-content a.source-card,.source-card{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);text-decoration:none;transition:.15s;min-width:0}
+.message-content a.source-card:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--border-strong));background:var(--surface-2);transform:translateY(-1px)}
+.src-num{flex:0 0 auto;width:20px;height:20px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;font-family:var(--mono);background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent);margin-top:1px}
+.src-body{display:flex;flex-direction:column;min-width:0;gap:2px}
+.src-title{font-size:13px;font-weight:600;line-height:1.35;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.src-meta{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.src-path{color:var(--faint)}
+
 /* Math */
 .math-display{margin:.6em 0;overflow-x:auto;overflow-y:hidden;padding:4px 0}
 .message-content .katex{font-size:1.08em}
@@ -637,6 +649,53 @@ function renderMath(m) {
     return m.display ? '<div class="math-display"><code>' + safe + "</code></div>" : "<code>" + safe + "</code>";
 }
 
+/* ---- Sources: turn a search "Sources" list into tidy cards ---------
+   Bing redirect links (bing.com/aclick?...&u=a1<base64 of the real URL>)
+   are decoded to the real destination so the card shows the actual site. */
+function decodeSourceUrl(u) {
+    try {
+        const x = new URL(u);
+        if (/(^|\.)bing\.com$/i.test(x.hostname) && x.pathname.startsWith("/aclick")) {
+            const p = x.searchParams.get("u");
+            if (p) {
+                let b = p.replace(/^a1/, "").replace(/-/g, "+").replace(/_/g, "/");
+                while (b.length % 4) b += "=";
+                const bytes = Uint8Array.from(atob(b), c => c.charCodeAt(0));
+                const real = new TextDecoder().decode(bytes);
+                if (/^https?:\/\//i.test(real)) return real;
+            }
+        }
+    } catch {}
+    return u;
+}
+
+function sourceCard(item, i) {
+    const raw = item.replace(/&amp;/g, "&");               // URLs were HTML-escaped earlier
+    const um = raw.match(/https?:\/\/[^\s)<>"]+/);
+    const rawUrl = um ? um[0] : "";
+    const href = rawUrl ? decodeSourceUrl(rawUrl) : "";
+    const safeHref = /^https?:\/\//i.test(href) ? href : "";
+    let host = "", path = "";
+    try {
+        const x = new URL(href);
+        host = x.hostname.replace(/^www\./, "");
+        const p = decodeURI(x.pathname).replace(/\/$/, "");
+        path = p.length > 1 ? (p.length > 40 ? p.slice(0, 40) + "…" : p) : "";
+    } catch {}
+    // title = the text around the link, with the link and separators removed
+    let title = raw.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+                   .replace(rawUrl, "").replace(/\*\*/g, "")
+                   .replace(/^[\s:\-—–|]+|[\s:\-—–|]+$/g, "").trim();
+    if (!title) title = host || "Source";
+    const attr = s => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+    const inner = '<span class="src-num">' + (i + 1) + '</span>' +
+        '<span class="src-body"><span class="src-title">' + title + '</span>' +
+        '<span class="src-meta">' + attr(host) + (path ? '<span class="src-path">' + attr(path) + '</span>' : '') + '</span></span>';
+    return safeHref
+        ? '<a class="source-card" href="' + attr(safeHref) + '" target="_blank" rel="noopener noreferrer">' + inner + '</a>'
+        : '<div class="source-card">' + inner + '</div>';
+}
+
 function parseMarkdown(text) {
     if (!text) return "";
 
@@ -657,6 +716,7 @@ function parseMarkdown(text) {
     const lines = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").split("\n");
     const out = [];
     let inCode = false, code = [], lang = "code", list = null, para = [], tbl = [];
+    let srcMode = false, srcItems = [];
 
     const flushPara = () => { if (para.length) { out.push("<p>" + inlineMd(para.join("<br>")) + "</p>"); para = []; } };
     const flushList = () => { if (list) { out.push("</" + list + ">"); list = null; } };
@@ -680,6 +740,14 @@ function parseMarkdown(text) {
         }
         tbl = [];
     };
+    const flushSources = () => {
+        if (!srcMode) return;
+        srcMode = false;
+        if (!srcItems.length) { out.push("<p><strong>Sources:</strong></p>"); return; }
+        out.push('<div class="sources"><div class="sources-title">Sources</div><div class="source-list">' +
+            srcItems.map((it, i) => sourceCard(it, i)).join("") + "</div></div>");
+        srcItems = [];
+    };
 
     const codeHtml = () =>
         '<div class="code-block-container"><div class="code-block-header"><span class="code-block-lang">' + lang +
@@ -700,6 +768,15 @@ function parseMarkdown(text) {
             continue;
         }
         if (inCode) { code.push(line); continue; }
+
+        // Sources block: collect the bullet items that follow a "Sources:" heading
+        if (srcMode) {
+            const li = t.match(/^[-*]\s+(.*)$/);
+            if (li) { srcItems.push(li[1]); continue; }
+            if (t === "") continue;
+            flushSources();
+        }
+        if (/^\**\s*sources?\s*:?\s*\**$/i.test(t)) { flushPara(); flushList(); srcMode = true; srcItems = []; continue; }
 
         let m;
         if ((m = t.match(/^(#{1,3})\s+(.*)$/))) {
@@ -724,7 +801,7 @@ function parseMarkdown(text) {
         }
 
     }
-    flushTable(); flushPara(); flushList();
+    flushTable(); flushSources(); flushPara(); flushList();
     if (inCode) out.push(codeHtml());
 
     // 3) Put the rendered math back in place.
