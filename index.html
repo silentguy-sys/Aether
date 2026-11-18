@@ -189,6 +189,7 @@ body.is-generating .brand-logo{animation:spin 1.1s linear infinite}
 .send-button{width:34px;height:34px;min-width:34px;border-radius:50%;background:var(--accent);color:var(--on-accent);font-size:18px;font-weight:700;transition:.15s}
 .send-button:hover:not(:disabled){transform:scale(1.07)}
 .send-button:disabled{opacity:.25;cursor:default}
+.send-button.stop{background:var(--text);color:var(--bg);font-size:13px}
 .composer-footer{width:min(840px,100%);display:flex;justify-content:space-between;gap:12px;margin:6px auto 0;padding:0 6px;color:var(--faint);font-size:10px}
 
 .model-menu{left:0;bottom:calc(100% + 8px);width:min(340px,86vw);max-height:60vh;overflow-y:auto}
@@ -496,6 +497,7 @@ button{-webkit-tap-highlight-color:transparent}
             </button>
           </div>
           <button id="sendButton" class="send-button" disabled aria-label="Send">↑</button>
+          <button id="stopButton" class="send-button stop hidden" type="button" aria-label="Stop generating" title="Stop generating (Esc)">■</button>
         </div>
       </div>
       <div class="composer-footer">
@@ -520,7 +522,7 @@ button{-webkit-tap-highlight-color:transparent}
 /* =====================================================================
    Aether frontend — vanilla JS
    Backend: Aether Server (FastAPI). Endpoints used (all from the original
-   source): /health, /signup, /login, /logout, /chat/stream,
+   source): /health, /signup, /login, /logout, /chat/stream, /chat/cancel,
    /conversations, /conversations/{id}.
    ===================================================================== */
 
@@ -585,6 +587,9 @@ let currentView = "chats";
 let syntaxActive = localStorage.getItem(SYNTAX_KEY) === "1";
 let pendingImages = [];          // data URLs waiting to be sent
 let conversations = [];
+let activeAbort = null;        // AbortController for this tab's streaming request
+let activeRequestId = null;    // the id the server knows that request by
+const newRequestId = () => "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 let activeConversationId = localStorage.getItem(ACTIVE_KEY) || null;
 let selectedModel = localStorage.getItem(MODEL_KEY) || DEFAULT_MODEL;
 
@@ -705,9 +710,10 @@ function authFetch(path, options) {
 // Syntax Code mode: the server's existing /code command does the work, so we
 // prefix the outgoing message with "/code ". The user never sees the prefix.
 const SYNTAX_PREFIX = "/code ";
-function chatBody(sessionId, message, model, guest, syntaxCode, images) {
+function chatBody(sessionId, message, model, guest, syntaxCode, images, requestId) {
     const outgoing = syntaxCode ? SYNTAX_PREFIX + message : message;
-    return JSON.stringify({ session_id: sessionId, message: outgoing, model, guest, token: getToken(), images: images || [] });
+    return JSON.stringify({ session_id: sessionId, message: outgoing, model, guest, token: getToken(),
+                            images: images || [], request_id: requestId || "" });
 }
 // Server-stored history contains the prefix; hide it when displaying.
 const stripSyntaxPrefix = s => (typeof s === "string" && s.startsWith(SYNTAX_PREFIX)) ? s.slice(SYNTAX_PREFIX.length) : s;
@@ -1390,6 +1396,10 @@ async function sendMessage() {
     thinking = true;
     document.body.classList.add("is-generating");
     updateComposer(); showThinking(modelUsed);
+    const requestId = newRequestId();
+    activeRequestId = isLoggedIn() ? requestId : null;
+    activeAbort = new AbortController();
+    setStopVisible(true);
 
     let msgEl = null, textNode = null, full = "";
     const finishError = (message, partial) => {
@@ -1403,7 +1413,7 @@ async function sendMessage() {
     try {
         const response = await fetch(API_URL + "/chat/stream", {
             method: "POST", headers: { "Content-Type": "application/json" },
-            body: chatBody(conv.id, text, modelUsed, guest, useSyntax, images)
+            body: chatBody(conv.id, text, modelUsed, guest, useSyntax, images, requestId), signal: activeAbort.signal
         });
         if (response.status === 401) { expireLogin(); throw new Error("Your login expired. Please log in again."); }
         if (!response.ok) {
@@ -1414,10 +1424,10 @@ async function sendMessage() {
         if (!response.body) throw new Error("This browser can't read streamed responses.");
 
         const reader = response.body.getReader(), decoder = new TextDecoder("utf-8");
-        let streamErr = null;
+        let streamErr = null, stopped = false;
         while (true) {
             let chunk;
-            try { chunk = await reader.read(); } catch (e) { streamErr = e; break; }
+            try { chunk = await reader.read(); } catch (e) { if (e && e.name === "AbortError") stopped = true; else streamErr = e; break; }
             if (chunk.done) break;
             const piece = decoder.decode(chunk.value, { stream: true });
             if (!piece) continue;
@@ -1434,6 +1444,23 @@ async function sendMessage() {
             updateScrollButton();
         }
 
+        if (stopped) {
+            // The user stopped this reply: keep whatever was already written.
+            removeThinking();
+            if (full.trim()) {
+                conv.messages.push({ role: "assistant", content: full, timestamp: Date.now(), model: modelUsed });
+                renderedCount = conv.messages.length;
+            } else {
+                if (msgEl) msgEl.remove();
+                const lastMsg = conv.messages[conv.messages.length - 1];
+                if (lastMsg && lastMsg.role === "user") lastMsg.transient = true;
+            }
+            if (!guest) { conv.remote = true; conv.loaded = true; }
+            conv.updatedAt = Date.now();
+            saveConversations(); renderConversationList();
+            if (!full.trim()) renderChat();
+            return;
+        }
         if (streamErr) {
             finishError("The connection was interrupted" + (full ? " — the reply above is incomplete." : "."), full);
             renderChat(); showToast("Response interrupted");
@@ -1448,17 +1475,47 @@ async function sendMessage() {
         conv.updatedAt = Date.now();
         saveConversations(); renderConversationList();
     } catch (error) {
-        finishError(error instanceof TypeError ? "Can't reach the Aether server." : error.message, full);
+        if (error && error.name === "AbortError") {
+            // stopped before the first byte arrived
+            removeThinking(); if (msgEl) msgEl.remove();
+            const lastMsg = conv.messages[conv.messages.length - 1];
+            if (full.trim()) conv.messages.push({ role: "assistant", content: full, timestamp: Date.now(), model: modelUsed });
+            else if (lastMsg && lastMsg.role === "user") lastMsg.transient = true;
+        } else {
+            finishError(error instanceof TypeError ? "Can't reach the Aether server." : error.message, full);
+        }
         conv.updatedAt = Date.now();
         saveConversations(); renderConversationList(); renderChat();
-        showToast("Aether request failed");
+        if (!(error && error.name === "AbortError")) showToast("Aether request failed");
         pollHealth();
     } finally {
         document.body.classList.remove("is-generating");
+        activeAbort = null; activeRequestId = null; setStopVisible(false);
         thinking = false;
         updateComposer(); messageInput.focus();
         if (isLoggedIn()) syncConversations();
     }
+}
+
+// Stops only this tab's own reply. The local abort ends the stream at once; the
+// server is also told so it frees the model slot (the server only ever stops
+// the caller's own request).
+function stopGenerating() {
+    if (!thinking || !activeAbort) return;
+    const id = activeRequestId;
+    activeAbort.abort();
+    if (id && isLoggedIn()) {
+        authFetch("/chat/cancel", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ request_id: id })
+        }).catch(() => {});
+    }
+    showToast("Stopped");
+}
+
+function setStopVisible(on) {
+    $("stopButton").classList.toggle("hidden", !on);
+    sendButton.classList.toggle("hidden", on);
 }
 
 function newChat() {
@@ -1505,6 +1562,7 @@ messageInput.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage(); }
 });
 sendButton.addEventListener("click", sendMessage);
+$("stopButton").addEventListener("click", stopGenerating);
 $("newChatButton").addEventListener("click", newChat);
 $("attachButton").addEventListener("click", () => { if (!thinking) $("imageInput").click(); });
 $("imageInput").addEventListener("change", e => { addImageFiles(Array.from(e.target.files)); e.target.value = ""; });
@@ -1572,6 +1630,7 @@ $("modalClose").addEventListener("click", closeModal);
 $("modalBackdrop").addEventListener("click", closeModal);
 
 document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && thinking && modal.classList.contains("hidden")) stopGenerating();
     if (e.key === "Escape") { closeModal(); closePopovers(); setDrawer(false); }
     const tag = document.activeElement && document.activeElement.tagName;
     if (e.key.toLowerCase() === "n" && !e.ctrlKey && !e.altKey && !e.metaKey && !["INPUT", "TEXTAREA"].includes(tag)) newChat();
