@@ -617,9 +617,9 @@ let selectedModel = localStorage.getItem(MODEL_KEY) || DEFAULT_MODEL;
 function inlineMd(s) {
     const codes = [];
     s = s.replace(/`([^`\n]+)`/g, (_, c) => { codes.push(c); return "\u0000" + (codes.length - 1) + "\u0000"; });
-    s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="\$2" target="_blank" rel="noopener noreferrer">\$1</a>');
-    s = s.replace(/\*\*([^*\n]+?)\*\*/g, "<strong>\$1</strong>");
-    s = s.replace(/(^|[^*])\*([^*\n]+?)\*(?!\*)/g, "\$1<em>\$2</em>");
+    s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    s = s.replace(/\*\*([^*\n]+?)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/(^|[^*])\*([^*\n]+?)\*(?!\*)/g, "$1<em>$2</em>");
     return s.replace(/\u0000(\d+)\u0000/g, (_, i) => "<code>" + codes[+i] + "</code>");
 }
 
@@ -660,13 +660,13 @@ function parseMarkdown(text) {
 
     const flushPara = () => { if (para.length) { out.push("<p>" + inlineMd(para.join("<br>")) + "</p>"); para = []; } };
     const flushList = () => { if (list) { out.push("</" + list + ">"); list = null; } };
-    const splitRow = r => r.replace(/^\|/, "").replace(/\|\$/, "").split("|").map(c => c.trim());
-    const isSep = r => /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\$/.test(r);
+    const splitRow = r => r.replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
+    const isSep = r => /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$/.test(r);
     const flushTable = () => {
         if (!tbl.length) return;
         if (tbl.length >= 2 && isSep(tbl[1])) {
             const head = splitRow(tbl[0]);
-            const al = splitRow(tbl[1]).map(c => /^:-+:/.test(c) ? "c" : /-+:/.test(c) ? "r" : "l");
+            const al = splitRow(tbl[1]).map(c => /^:-+:$/.test(c) ? "c" : /-+:$/.test(c) ? "r" : "l");
             const cell = (tag, c, i) => "<" + tag + ' data-a="' + (al[i] || "l") + '">' + inlineMd(c) + "</" + tag + ">";
             let h = '<div class="table-wrap"><table><thead><tr>' + head.map((c, i) => cell("th", c, i)).join("") + "</tr></thead><tbody>";
             for (const r of tbl.slice(2)) {
@@ -675,11 +675,12 @@ function parseMarkdown(text) {
             }
             out.push(h + "</tbody></table></div>");
         } else {
-            tbl.forEach(r => para.push(r));   // not a table: treat as plain text
+            tbl.forEach(r => para.push(r));
             flushPara();
         }
         tbl = [];
     };
+
     const codeHtml = () =>
         '<div class="code-block-container"><div class="code-block-header"><span class="code-block-lang">' + lang +
         '</span><button class="code-block-copy-btn" data-copy-code>Copy</button></div><pre><code>' + code.join("\n") + "</code></pre></div>";
@@ -721,6 +722,7 @@ function parseMarkdown(text) {
         } else {
             flushList(); para.push(t);
         }
+
     }
     flushTable(); flushPara(); flushList();
     if (inCode) out.push(codeHtml());
