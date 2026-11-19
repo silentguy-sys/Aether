@@ -277,6 +277,12 @@ input[type=color]{width:34px;height:28px;padding:0;border:1px solid var(--border
 .msg-images{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 8px}
 .msg-images img{max-width:220px;max-height:180px;border-radius:12px;border:1px solid var(--border);object-fit:cover}
 .composer.drop{border-color:var(--accent)}
+.file-card{display:flex;align-items:center;gap:12px;margin:10px 0;padding:12px 14px;max-width:520px;border:1px solid var(--border-strong);border-radius:12px;background:var(--surface)}
+.file-ic{flex:0 0 auto;width:34px;height:34px;display:flex;align-items:center;justify-content:center;border-radius:9px;background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent);font-family:var(--mono);font-size:13px;font-weight:700}
+.file-meta{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.file-meta strong{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-meta span{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-dl{height:32px;padding:0 12px;font-size:12px}
 .scrim{display:none}
 
 /* Responsive */
@@ -696,6 +702,19 @@ function sourceCard(item, i) {
         : '<div class="source-card">' + inner + '</div>';
 }
 
+// Conversation whose messages are being rendered (file downloads are scoped to it).
+let parseSid = null;
+
+// A file the code agent wrote: a card with a Download button (fetched with the login token).
+function fileCard(rel) {
+    const attr = s => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+    const name = rel.split("/").pop();
+    return '<div class="file-card" data-session="' + attr(parseSid || activeConversationId || "") + '">' +
+        '<span class="file-ic">▤</span>' +
+        '<span class="file-meta"><strong>' + attr(name) + '</strong><span>' + attr(rel) + '</span></span>' +
+        '<button class="btn ghost file-dl" type="button" data-download="' + attr(rel) + '">Download</button></div>';
+}
+
 function parseMarkdown(text) {
     if (!text) return "";
 
@@ -768,6 +787,8 @@ function parseMarkdown(text) {
             continue;
         }
         if (inCode) { code.push(line); continue; }
+        const fm = t.match(/^\[\[file:(.+)\]\]$/);
+        if (fm) { flushPara(); flushList(); out.push(fileCard(fm[1])); continue; }
 
         // Sources block: collect the bullet items that follow a "Sources:" heading
         if (srcMode) {
@@ -1427,6 +1448,7 @@ function renderChat() {
     const sameConv = c.id === renderedConvId;
     const animFrom = sameConv ? renderedCount : Infinity;   // only newly added messages animate
     renderedConvId = c.id; renderedCount = c.messages.length;
+    parseSid = c.id;
     const list = document.createElement("div"); list.className = "message-list" + (sameConv ? "" : " fade");
     c.messages.forEach((m, idx) => list.appendChild(addMessageElement(m.role, m.content, m.timestamp, m.model, m.error, idx >= animFrom, m.images)));
     chatArea.appendChild(list);
@@ -1500,6 +1522,7 @@ async function sendMessage() {
     if (!text || thinking) return;
 
     const conv = ensureActiveConversation();
+    parseSid = conv.id;
     const modelUsed = selectedModel, useSyntax = isSyntaxOn(), ts = Date.now();
     conv.messages.push({ role: "user", content: text, timestamp: ts, images: images.length ? images : undefined });
     pendingImages = []; renderAttachments();
@@ -1697,6 +1720,28 @@ $("clearButton").addEventListener("click", clearCurrentConversation);
 $("exportButton").addEventListener("click", exportConversation);
 $("scrollBottom").addEventListener("click", () => chatArea.scrollTo({ top: chatArea.scrollHeight, behavior: "smooth" }));
 chatArea.addEventListener("scroll", updateScrollButton);
+chatArea.addEventListener("click", async e => {
+    const btn = e.target.closest("[data-download]");
+    if (!btn) return;
+    const card = btn.closest("[data-session]");
+    const sid = card ? card.dataset.session : "", rel = btn.dataset.download;
+    if (!sid || !rel) { showToast("This file can't be downloaded"); return; }
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = "…";
+    try {
+        const url = "/agent/files/" + encodeURIComponent(sid) + "/" + rel.split("/").map(encodeURIComponent).join("/");
+        const r = await authFetch(url);
+        if (r.status === 401) { expireLogin(); return; }
+        if (!r.ok) throw new Error("file not found (" + r.status + ")");
+        const blobUrl = URL.createObjectURL(await r.blob());
+        const a = document.createElement("a");
+        a.href = blobUrl; a.download = rel.split("/").pop();
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 4000);
+    } catch (err) {
+        showToast("Download failed: " + err.message);
+    } finally { btn.disabled = false; btn.textContent = label; }
+});
 $("chatSearch").addEventListener("input", renderConversationList);
 
 $("mobileMenu").addEventListener("click", () => setDrawer(true));
