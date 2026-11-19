@@ -541,7 +541,7 @@ button{-webkit-tap-highlight-color:transparent}
             </div>
             <button class="chip attach hidden" id="attachButton" type="button" title="Attach image" aria-label="Attach image">＋</button>
             <input type="file" id="imageInput" accept="image/png,image/jpeg,image/webp,image/gif" multiple class="hidden">
-            <button class="chip attach hidden" id="fileButton" type="button" title="Attach file" aria-label="Attach file">📎</button>
+            <button class="chip attach hidden" id="fileButton" type="button" title="Attach file" aria-label="Attach file"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
             <input type="file" id="fileInput" multiple class="hidden">
             <button class="chip toggle hidden" id="syntaxToggle" type="button" aria-pressed="false" title="Syntax Code mode">
               <span>{ }</span> Syntax Code
@@ -1433,7 +1433,14 @@ function addMessageElement(role, content, timestamp, model, isError, animate, im
     }
     if (fileNames && fileNames.length) {
         const box = document.createElement("div"); box.className = "msg-files";
-        for (const n of fileNames) { const s = document.createElement("span"); s.textContent = "📎 " + n; s.title = n; box.appendChild(s); }
+        for (const n of fileNames) {
+        const s = document.createElement("span");
+        s.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-right:5px;opacity:.75"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
+        s.append(document.createTextNode(n));
+        s.title = n;
+        box.appendChild(s);
+    }
+
         body.appendChild(box);
     }
     body.append(text);
