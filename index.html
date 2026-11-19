@@ -283,6 +283,14 @@ input[type=color]{width:34px;height:28px;padding:0;border:1px solid var(--border
 .file-meta strong{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .file-meta span{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .file-dl{height:32px;padding:0 12px;font-size:12px}
+.file-meta{cursor:pointer}
+.file-meta:hover strong{color:var(--accent)}
+.file-panel{position:fixed;top:0;right:0;bottom:0;width:min(540px,100%);z-index:110;display:flex;flex-direction:column;background:var(--surface);border-left:1px solid var(--border-strong);box-shadow:-20px 0 50px rgba(0,0,0,.3);transform:translateX(105%);transition:transform .22s ease}
+.file-panel.open{transform:none}
+.file-panel-head{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--border)}
+.file-panel-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:12px;color:var(--muted)}
+.file-panel-head .btn{height:32px;font-size:12px}
+.file-panel-body{flex:1;margin:0;padding:14px;overflow:auto;font-family:var(--mono);font-size:12.5px;line-height:1.55;white-space:pre;color:var(--text)}
 .scrim{display:none}
 
 /* Responsive */
@@ -551,6 +559,14 @@ button{-webkit-tap-highlight-color:transparent}
   </div>
 </div>
 
+<aside class="file-panel" id="filePanel" aria-label="File viewer">
+  <div class="file-panel-head">
+    <span class="file-panel-name" id="filePanelName"></span>
+    <button class="btn ghost" id="filePanelCopy" type="button">Copy</button>
+    <button class="icon-btn" id="filePanelClose" type="button" aria-label="Close file">×</button>
+  </div>
+  <pre class="file-panel-body" id="filePanelBody"></pre>
+</aside>
 <div class="toast-container" id="toastContainer"></div>
 
 <script>
@@ -711,7 +727,7 @@ function fileCard(rel) {
     const name = rel.split("/").pop();
     return '<div class="file-card" data-session="' + attr(parseSid || activeConversationId || "") + '">' +
         '<span class="file-ic">▤</span>' +
-        '<span class="file-meta"><strong>' + attr(name) + '</strong><span>' + attr(rel) + '</span></span>' +
+        '<span class="file-meta" data-open="' + attr(rel) + '" title="Open file"><strong>' + attr(name) + '</strong><span>' + attr(rel) + '</span></span>' +
         '<button class="btn ghost file-dl" type="button" data-download="' + attr(rel) + '">Download</button></div>';
 }
 
@@ -1720,6 +1736,33 @@ $("clearButton").addEventListener("click", clearCurrentConversation);
 $("exportButton").addEventListener("click", exportConversation);
 $("scrollBottom").addEventListener("click", () => chatArea.scrollTo({ top: chatArea.scrollHeight, behavior: "smooth" }));
 chatArea.addEventListener("scroll", updateScrollButton);
+// Clicking a file's name opens its code in the side panel.
+const filePanel = $("filePanel");
+chatArea.addEventListener("click", async e => {
+    const open = e.target.closest("[data-open]");
+    if (!open) return;
+    const card = open.closest("[data-session]");
+    const sid = card ? card.dataset.session : "", rel = open.dataset.open;
+    if (!sid || !rel) return;
+    $("filePanelName").textContent = rel;
+    $("filePanelBody").textContent = "Loading…";
+    filePanel.classList.add("open");
+    try {
+        const url = "/agent/files/" + encodeURIComponent(sid) + "/" + rel.split("/").map(encodeURIComponent).join("/");
+        const r = await authFetch(url);
+        if (r.status === 401) { expireLogin(); return; }
+        if (!r.ok) throw new Error("file not found (" + r.status + ")");
+        $("filePanelBody").textContent = await r.text();
+    } catch (err) {
+        $("filePanelBody").textContent = "Couldn't open this file: " + err.message;
+    }
+});
+$("filePanelClose").addEventListener("click", () => filePanel.classList.remove("open"));
+$("filePanelCopy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText($("filePanelBody").textContent); showToast("Copied"); }
+    catch { showToast("Couldn't copy"); }
+});
+
 chatArea.addEventListener("click", async e => {
     const btn = e.target.closest("[data-download]");
     if (!btn) return;
