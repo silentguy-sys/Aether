@@ -273,6 +273,12 @@ input[type=color]{width:34px;height:28px;padding:0;border:1px solid var(--border
 .attach-thumb{position:relative;width:56px;height:56px;border-radius:10px;overflow:hidden;border:1px solid var(--border-strong);animation:pop .18s ease}
 .attach-thumb img{width:100%;height:100%;object-fit:cover;display:block}
 .attach-remove{position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;background:rgba(0,0,0,.65);color:#fff;font-size:12px;line-height:18px;text-align:center}
+.file-chip{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 6px 0 10px;border:1px solid var(--border-strong);border-radius:10px;background:var(--surface-2);font-size:12px;max-width:260px;animation:pop .18s ease}
+.file-chip-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.file-chip-remove{width:20px;height:20px;min-width:20px;border-radius:50%;color:var(--muted);font-size:14px;line-height:20px;text-align:center}
+.file-chip-remove:hover{background:var(--hover);color:var(--text)}
+.msg-files{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px}
+.msg-files span{display:inline-flex;align-items:center;max-width:260px;padding:4px 10px;border:1px solid var(--border);border-radius:9px;background:var(--surface-2);font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chip.attach{width:32px;padding:0;justify-content:center;font-size:16px}
 .msg-images{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 8px}
 .msg-images img{max-width:220px;max-height:180px;border-radius:12px;border:1px solid var(--border);object-fit:cover}
@@ -535,6 +541,8 @@ button{-webkit-tap-highlight-color:transparent}
             </div>
             <button class="chip attach hidden" id="attachButton" type="button" title="Attach image" aria-label="Attach image">＋</button>
             <input type="file" id="imageInput" accept="image/png,image/jpeg,image/webp,image/gif" multiple class="hidden">
+            <button class="chip attach hidden" id="fileButton" type="button" title="Attach file" aria-label="Attach file">📎</button>
+            <input type="file" id="fileInput" multiple class="hidden">
             <button class="chip toggle hidden" id="syntaxToggle" type="button" aria-pressed="false" title="Syntax Code mode">
               <span>{ }</span> Syntax Code
             </button>
@@ -582,10 +590,10 @@ const API_URL = "https://earthwarmer2000ultimate.tailfff298.ts.net";
 /* ---- Easy-to-edit configuration ----------------------------------- */
 
 // Model list. Filled at runtime from GET /health (id -> {name, desc,
-// syntaxCode, vision}). When Syntax Code mode is on, "/code " is silently
+// syntaxCode, vision, files}). When Syntax Code mode is on, "/code " is silently
 // prefixed to the message sent to the server (see chatBody).
 // Seeded with the default model so the UI can render before the first /health reply arrives.
-const MODELS = { "aether-everyday": { name: "Aether Everyday", desc: "Checking…", syntaxCode: false, vision: false } };  // then filled from GET /health
+const MODELS = { "aether-everyday": { name: "Aether Everyday", desc: "Checking…", syntaxCode: false, vision: false, files: false } };  // then filled from GET /health
 const DEFAULT_MODEL = "aether-everyday";
 const GUEST_ALLOWED_MODELS = ["aether-everyday"];   // keep in sync with the server
 const GUEST_DEFAULT_MODEL = "aether-everyday";
@@ -597,7 +605,7 @@ async function loadModels() {
         if (!r.ok) throw new Error("health " + r.status);
         const d = await r.json();
         for (const [id, m] of Object.entries(d.models || {})) {
-            MODELS[id] = { name: m.name || id, desc: m.running ? "Online" : "Offline", syntaxCode: false, vision: false };
+            MODELS[id] = { name: m.name || id, desc: m.running ? "Online" : "Offline", syntaxCode: false, vision: false, files: !!m.files };
         }
     } catch {}
 }
@@ -609,6 +617,8 @@ const MEMORY_ENDPOINT = null;
 
 const MAX_IMAGES = 4;            // keep in sync with the server
 const IMAGE_MAX_SIDE = 1280;     // images are shrunk in the browser before upload
+const MAX_FILES = 4;             // keep in sync with the server (MAX_FILES_PER_MESSAGE)
+const MAX_FILE_BYTES = 8000000;  // keep in sync with the server (MAX_FILE_BYTES)
 const HEALTH_POLL_MS = 10000;
 const ACCENTS = ["#42d97b", "#4f8cff", "#a87bff", "#ff7a59", "#ffc247", "#ff5fa2"];
 
@@ -637,6 +647,7 @@ let syncing = false;
 let currentView = "chats";
 let syntaxActive = localStorage.getItem(SYNTAX_KEY) === "1";
 let pendingImages = [];          // data URLs waiting to be sent
+let pendingFiles = [];           // { name, data (base64) } waiting to be sent
 let conversations = [];
 let activeAbort = null;        // AbortController for this tab's streaming request
 let activeRequestId = null;    // the id the server knows that request by
@@ -862,10 +873,11 @@ function authFetch(path, options) {
 // Syntax Code mode: the server's existing /code command does the work, so we
 // prefix the outgoing message with "/code ". The user never sees the prefix.
 const SYNTAX_PREFIX = "/code ";
-function chatBody(sessionId, message, model, guest, syntaxCode, images, requestId) {
+function chatBody(sessionId, message, model, guest, syntaxCode, images, requestId, files) {
     const outgoing = syntaxCode ? SYNTAX_PREFIX + message : message;
+    const fileList = (files || []).map(f => ({ name: f.name, data: f.data }));
     return JSON.stringify({ session_id: sessionId, message: outgoing, model, guest, token: getToken(),
-                            images: images || [], request_id: requestId || "" });
+                            images: images || [], files: fileList, request_id: requestId || "" });
 }
 // Server-stored history contains the prefix; hide it when displaying.
 const stripSyntaxPrefix = s => (typeof s === "string" && s.startsWith(SYNTAX_PREFIX)) ? s.slice(SYNTAX_PREFIX.length) : s;
@@ -916,6 +928,10 @@ function updateModelUI() {
     const canImg = supportsImages(selectedModel);
     $("attachButton").classList.toggle("hidden", !canImg);
     if (!canImg && pendingImages.length) { pendingImages = []; renderAttachments(); }
+
+    const canFile = supportsFiles(selectedModel);
+    $("fileButton").classList.toggle("hidden", !canFile);
+    if (!canFile && pendingFiles.length) { pendingFiles = []; renderAttachments(); }
 
     const pill = $("topStatusPill");
     pill.classList.toggle("online", !!modelStatus && dotClass(selectedModel) === "online");
@@ -978,16 +994,53 @@ async function addImageFiles(files) {
     renderAttachments(); updateComposer();
 }
 
+/* ===================================================================
+   File attachments (any text file, Word .docx and PDF; not pictures)
+   =================================================================== */
+function supportsFiles(id) {
+    const m = MODELS[id];
+    return !!(m && m.files && isLoggedIn());
+}
+
+// Reads a file as base64 (the part after the data: prefix).
+function readFileAsBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+        reader.onerror = () => reject(new Error("read failed"));
+        reader.readAsDataURL(file);
+    });
+}
+
+async function addDocumentFiles(files) {
+    if (!supportsFiles(selectedModel)) { showToast("Log in to attach files"); return; }
+    for (const f of files) {
+        if (f.type.startsWith("image/")) { showToast("Use the image button for pictures"); continue; }
+        if (pendingFiles.length >= MAX_FILES) { showToast("Up to " + MAX_FILES + " files per message"); break; }
+        if (f.size > MAX_FILE_BYTES) { showToast(f.name + " is too large (max 8 MB)"); continue; }
+        try { pendingFiles.push({ name: f.name, data: await readFileAsBase64(f) }); }
+        catch { showToast("Couldn't read " + f.name); }
+    }
+    renderAttachments(); updateComposer();
+}
+
 function renderAttachments() {
     const strip = $("attachStrip");
     strip.innerHTML = "";
-    strip.classList.toggle("hidden", pendingImages.length === 0);
+    strip.classList.toggle("hidden", pendingImages.length === 0 && pendingFiles.length === 0);
     pendingImages.forEach((url, i) => {
         const t = document.createElement("div"); t.className = "attach-thumb";
         const img = document.createElement("img"); img.src = url; img.alt = "Attached image";
         const x = document.createElement("button"); x.type = "button"; x.className = "attach-remove"; x.textContent = "×"; x.setAttribute("aria-label", "Remove image");
         x.addEventListener("click", () => { pendingImages.splice(i, 1); renderAttachments(); updateComposer(); });
         t.append(img, x); strip.appendChild(t);
+    });
+    pendingFiles.forEach((f, i) => {
+        const chip = document.createElement("div"); chip.className = "file-chip";
+        const nm = document.createElement("span"); nm.className = "file-chip-name"; nm.textContent = f.name; nm.title = f.name;
+        const x = document.createElement("button"); x.type = "button"; x.className = "file-chip-remove"; x.textContent = "×"; x.setAttribute("aria-label", "Remove file");
+        x.addEventListener("click", () => { pendingFiles.splice(i, 1); renderAttachments(); updateComposer(); });
+        chip.append(nm, x); strip.appendChild(chip);
     });
 }
 
@@ -1355,7 +1408,7 @@ async function openConversation(id) {
 /* ===================================================================
    Rendering messages
    =================================================================== */
-function addMessageElement(role, content, timestamp, model, isError, animate, images) {
+function addMessageElement(role, content, timestamp, model, isError, animate, images, fileNames) {
     const msg = document.createElement("div");
     msg.className = "message " + role + (isError ? " error" : "") + (animate ? " enter" : "");
     const avatar = document.createElement("div");
@@ -1376,6 +1429,11 @@ function addMessageElement(role, content, timestamp, model, isError, animate, im
     if (images && images.length) {
         const box = document.createElement("div"); box.className = "msg-images";
         for (const u of images) { const im = document.createElement("img"); im.src = u; im.alt = "Attached image"; box.appendChild(im); }
+        body.appendChild(box);
+    }
+    if (fileNames && fileNames.length) {
+        const box = document.createElement("div"); box.className = "msg-files";
+        for (const n of fileNames) { const s = document.createElement("span"); s.textContent = "📎 " + n; s.title = n; box.appendChild(s); }
         body.appendChild(box);
     }
     body.append(text);
@@ -1466,7 +1524,7 @@ function renderChat() {
     renderedConvId = c.id; renderedCount = c.messages.length;
     parseSid = c.id;
     const list = document.createElement("div"); list.className = "message-list" + (sameConv ? "" : " fade");
-    c.messages.forEach((m, idx) => list.appendChild(addMessageElement(m.role, m.content, m.timestamp, m.model, m.error, idx >= animFrom, m.images)));
+    c.messages.forEach((m, idx) => list.appendChild(addMessageElement(m.role, m.content, m.timestamp, m.model, m.error, idx >= animFrom, m.images, m.fileNames)));
     chatArea.appendChild(list);
     requestAnimationFrame(() => { chatArea.scrollTop = chatArea.scrollHeight; updateScrollButton(); });
     updateComposer();
@@ -1515,7 +1573,8 @@ function updateComposer() {
     messageInput.disabled = !canSend;
     messageInput.placeholder = !canSend ? "Log in to chat with Aether..."
         : (isLoggedIn() ? (isSyntaxOn() ? "Describe the code you want…" : "Message Aether...") : "Message " + MODELS[selectedModel].name + " (guest mode)...");
-    sendButton.disabled = !canSend || thinking || (messageInput.value.trim().length === 0 && pendingImages.length === 0);
+    sendButton.disabled = !canSend || thinking ||
+        (messageInput.value.trim().length === 0 && pendingImages.length === 0 && pendingFiles.length === 0);
 }
 const isNearBottom = (th = 120) => chatArea.scrollHeight - chatArea.scrollTop - chatArea.clientHeight <= th;
 function resizeInput() {
@@ -1534,14 +1593,20 @@ async function sendMessage() {
     const guest = !isLoggedIn();
     if (guest && !GUEST_ALLOWED_MODELS.includes(selectedModel)) { showToast("Please log in to use this model"); openAuthModal("login"); return; }
     const images = supportsImages(selectedModel) ? pendingImages.slice() : [];
-    const text = messageInput.value.trim() || (images.length ? "What is in this image?" : "");
+    const files = supportsFiles(selectedModel) ? pendingFiles.slice() : [];
+    const text = messageInput.value.trim()
+        || (images.length ? "What is in this image?" : files.length ? "Please read the attached files." : "");
     if (!text || thinking) return;
 
     const conv = ensureActiveConversation();
     parseSid = conv.id;
     const modelUsed = selectedModel, useSyntax = isSyntaxOn(), ts = Date.now();
-    conv.messages.push({ role: "user", content: text, timestamp: ts, images: images.length ? images : undefined });
-    pendingImages = []; renderAttachments();
+    conv.messages.push({
+        role: "user", content: text, timestamp: ts,
+        images: images.length ? images : undefined,
+        fileNames: files.length ? files.map(f => f.name) : undefined
+    });
+    pendingImages = []; pendingFiles = []; renderAttachments();
     if (conv.title === "New conversation" || conv.messages.length === 1) conv.title = deriveTitle(text);
     conv.updatedAt = ts;
     messageInput.value = ""; resizeInput();
@@ -1567,7 +1632,7 @@ async function sendMessage() {
     try {
         const response = await fetch(API_URL + "/chat/stream", {
             method: "POST", headers: { "Content-Type": "application/json" },
-            body: chatBody(conv.id, text, modelUsed, guest, useSyntax, images, requestId), signal: activeAbort.signal
+            body: chatBody(conv.id, text, modelUsed, guest, useSyntax, images, requestId, files), signal: activeAbort.signal
         });
         if (response.status === 401) { expireLogin(); throw new Error("Your login expired. Please log in again."); }
         if (!response.ok) {
@@ -1720,6 +1785,8 @@ $("stopButton").addEventListener("click", stopGenerating);
 $("newChatButton").addEventListener("click", newChat);
 $("attachButton").addEventListener("click", () => { if (!thinking) $("imageInput").click(); });
 $("imageInput").addEventListener("change", e => { addImageFiles(Array.from(e.target.files)); e.target.value = ""; });
+$("fileButton").addEventListener("click", () => { if (!thinking) $("fileInput").click(); });
+$("fileInput").addEventListener("change", e => { addDocumentFiles(Array.from(e.target.files)); e.target.value = ""; });
 messageInput.addEventListener("paste", e => {
     const files = Array.from((e.clipboardData && e.clipboardData.files) || []).filter(f => f.type.startsWith("image/"));
     if (files.length && supportsImages(selectedModel)) { e.preventDefault(); addImageFiles(files); }
