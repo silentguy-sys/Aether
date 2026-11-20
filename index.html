@@ -180,6 +180,8 @@ body.is-generating .brand-logo{animation:spin 1.1s linear infinite}
 @keyframes pulse{0%,80%,100%{opacity:.25;transform:scale(.8)}40%{opacity:1;transform:scale(1)}}
 .thinking-text{background:linear-gradient(90deg,var(--muted) 30%,var(--text) 50%,var(--muted) 70%);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:shimmer 2s linear infinite}
 @keyframes shimmer{to{background-position:-200% 0}}
+.thinking-text.swap{animation:shimmer 2s linear infinite,stageIn .35s ease both}
+@keyframes stageIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 .cursor{display:inline-block;width:7px;height:1em;margin-left:2px;vertical-align:text-bottom;background:var(--accent);animation:blink 1s steps(2) infinite}
 @keyframes blink{50%{opacity:0}}
 
@@ -580,9 +582,9 @@ button{-webkit-tap-highlight-color:transparent}
 <script>
 /* =====================================================================
    Aether frontend — vanilla JS
-   Backend: Aether Server (FastAPI). Endpoints used (all from the original
-   source): /health, /signup, /login, /logout, /chat/stream, /chat/cancel,
-   /conversations, /conversations/{id}.
+   Backend: Aether Server (FastAPI). Endpoints used: /health, /signup,
+   /login, /logout, /chat/stream, /chat/cancel, /chat/status/{id},
+   /conversations, /conversations/{id}, /agent/files/{id}/{path}.
    ===================================================================== */
 
 const API_URL = "https://earthwarmer2000ultimate.tailfff298.ts.net";
@@ -620,6 +622,7 @@ const IMAGE_MAX_SIDE = 1280;     // images are shrunk in the browser before uplo
 const MAX_FILES = 4;             // keep in sync with the server (MAX_FILES_PER_MESSAGE)
 const MAX_FILE_BYTES = 8000000;  // keep in sync with the server (MAX_FILE_BYTES)
 const HEALTH_POLL_MS = 10000;
+const STATUS_POLL_MS = 400;      // how often the thinking indicator asks the server what it is doing
 const ACCENTS = ["#42d97b", "#4f8cff", "#a87bff", "#ff7a59", "#ffc247", "#ff5fa2"];
 
 /* ---- Storage keys (unchanged so existing data keeps working) ------- */
@@ -1434,13 +1437,12 @@ function addMessageElement(role, content, timestamp, model, isError, animate, im
     if (fileNames && fileNames.length) {
         const box = document.createElement("div"); box.className = "msg-files";
         for (const n of fileNames) {
-        const s = document.createElement("span");
-        s.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-right:5px;opacity:.75"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
-        s.append(document.createTextNode(n));
-        s.title = n;
-        box.appendChild(s);
-    }
-
+            const s = document.createElement("span");
+            s.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-right:5px;opacity:.75"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
+            s.append(document.createTextNode(n));
+            s.title = n;
+            box.appendChild(s);
+        }
         body.appendChild(box);
     }
     body.append(text);
@@ -1537,15 +1539,42 @@ function renderChat() {
     updateComposer();
 }
 
+/* ===================================================================
+   Live thinking indicator
+   The server reports what the request is doing right now (stage). The
+   site turns that into a line like "Aether Think is creating a file".
+   =================================================================== */
 let statusTimer = null;
 function stopStatusPoll() { if (statusTimer) { clearInterval(statusTimer); statusTimer = null; } }
 
-// While the thinking indicator is showing, ask the server what this request is doing.
-// If it is searching the web (or reading docs) the label says so, then goes back to thinking.
+// Maps a server stage to the words shown after the model's name.
+// Unknown or empty stages fall back to "is thinking".
+function stagePhrase(stage, searching) {
+    if (searching || stage === "searching web") return "is searching the web";
+    if (stage === "reading docs") return "is reading docs";
+    if (stage === "creating file") return "is creating a file";
+    if (stage === "calculating") return "is calculating";
+    if (stage === "running code") return "is running code";
+    if (stage === "coding agent" || (stage || "").startsWith("agent step")) return "is working on your project";
+    if (stage === "queued") return "is waiting for a free slot";
+    return "is thinking";
+}
+
+// Writes the indicator text, with a short fade when the wording changes.
+function setThinkingText(el, text) {
+    if (el.textContent === text) return;
+    el.textContent = text;
+    el.classList.remove("swap");
+    void el.offsetWidth;
+    el.classList.add("swap");
+}
+
+// While the thinking indicator is showing, ask the server what this request is doing
+// and update the wording as it changes.
 function startStatusPoll(model) {
     stopStatusPoll();
     const convId = activeConversationId;
-    const idleText = ((MODELS[model] && MODELS[model].name) || "Aether") + " is thinking";
+    const name = (MODELS[model] && MODELS[model].name) || "Aether";
     let busy = false;
     statusTimer = setInterval(async () => {
         if (busy) return;
@@ -1556,10 +1585,9 @@ function startStatusPoll(model) {
             const d = await r.json();
             const el = document.querySelector("#thinkingIndicator .thinking-text");
             if (!el) return;                       // indicator is gone (response started)
-            const text = d.searching ? "Searching web" : idleText;
-            if (el.textContent !== text) el.textContent = text;
+            setThinkingText(el, name + " " + stagePhrase(d.stage || "", !!d.searching));
         } catch {} finally { busy = false; }
-    }, 400);
+    }, STATUS_POLL_MS);
 }
 
 function showThinking(model) {
