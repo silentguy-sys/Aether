@@ -943,7 +943,7 @@ function renderModelMenu() {
         b.title = locked ? "Log in to use this model" : "";
         b.innerHTML = '<span class="chip-dot ' + dotClass(id) + '"></span><span class="mo-main"><strong></strong><span class="mo-desc"></span></span><span class="mo-check">✓</span>';
         b.querySelector("strong").textContent = m.name;
-        b.querySelector(".mo-desc").textContent = m.desc + (locked ? " (log in)" : "");
+        b.querySelector(".mo-desc").textContent = locked ? "Log in to unlock" : "";
         modelMenu.appendChild(b);
     }
 }
@@ -1277,8 +1277,8 @@ function openModelInfo() {
     modalContent.innerHTML = "<h2></h2><p></p><p></p>";
     const [h, p1, p2] = modalContent.children;
     h.textContent = m.name;
-    p1.textContent = (online === null ? "Checking status…" : online ? "● Online" : "● Offline") + (m.syntaxCode ? " · Syntax Code supported" : "");
-    p2.textContent = m.desc;
+    p1.textContent = "";
+    p2.textContent = "";
 }
 
 function openPolicy() {
