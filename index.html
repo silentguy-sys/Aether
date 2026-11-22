@@ -489,6 +489,12 @@ button{-webkit-tap-highlight-color:transparent}
 #collapseButton svg{width:17px;height:17px}
 #sendButton svg{display:block;margin:auto}
 .chip-caret{display:none}
+
+/* ---- Round 3: plain avatars and plain user text (no boxes, no bubble) ---- */
+.avatar.aether{background:none;border:0;width:30px;min-width:30px;height:30px}
+.avatar.aether img{width:30px;height:30px;object-fit:contain}
+.avatar.user{background:var(--surface-2);color:var(--muted);border:1px solid var(--border);border-radius:9px;width:30px;min-width:30px;height:30px}
+.message.user .message-content{display:block;background:none;border:0;padding:0;border-radius:0;font-size:15px;color:var(--text)}
 </style>
 <title>Aether</title>
 </head>
