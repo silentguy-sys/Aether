@@ -2164,19 +2164,6 @@ function buildLanding() {
         '</div>' +
       '</section>' +
 
-      '<section class="ld-sec ld-daily-sec">' +
-        '<div class="reveal"><span class="ld-eyebrow">Daily Aether Challenge</span><h2 class="ld-h2">A new puzzle every day.</h2>' +
-        '<p class="ld-sec-p">Solve it, get it graded, build a streak and earn XP. Four kinds of challenge:</p>' +
-        '<div class="ld-cats">' + Object.values(CATS).map(c => '<span>' + esc(c) + '</span>').join("") + '</div>' +
-        '<div class="ld-stats">' +
-          '<div><b>+' + XP_BASE + ' XP</b><span>for every solved challenge</span></div>' +
-          '<div><b>+' + XP_MODEL_BONUS + ' XP</b><span>bonus if you used a model that day</span></div>' +
-          '<div><b>+5 XP</b><span>max streak bonus, from day two</span></div>' +
-          '<div><b>' + MAX_ATTEMPTS + ' tries</b><span>per challenge, every day</span></div>' +
-        '</div></div>' +
-        '<div class="ld-challenges" id="ldChallenges"></div>' +
-      '</section>' +
-
       '<section class="ld-final reveal">' +
         '<span class="ld-eyebrow">Ready when you are</span>' +
         '<h2 id="ldFinalH">Pick an edition and start.</h2>' +
@@ -2206,7 +2193,6 @@ function buildLanding() {
   }), { root: el, threshold: 0.12, rootMargin: "0px 0px -6% 0px" });
   el.querySelectorAll(".reveal").forEach(n => io.observe(n));
 
-  renderChallenges();
   refreshLanding();
   startDemo();
 }
